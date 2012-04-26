@@ -15,7 +15,7 @@
 #ifndef __ASM_ARCH_MSM_SERIAL_HS_H
 #define __ASM_ARCH_MSM_SERIAL_HS_H
 
-#include<linux/serial_core.h>
+#include <linux/serial_core.h>
 
 /* Optional platform device data for msm_serial_hs driver.
  * Used to configure low power wakeup */

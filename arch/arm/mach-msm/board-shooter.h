@@ -25,7 +25,7 @@
 #endif
 
 
-/* deal with memory allocation */
+/* Memory allocation */
 
 #define MSM_SHARED_RAM_PHYS		0x40000000
 #define MSM_RAM_CONSOLE_BASE		0x40300000
@@ -95,20 +95,6 @@
 #define USER_SMI_SIZE         (MSM_SMI_SIZE - KERNEL_SMI_SIZE)
 #define MSM_PMEM_SMIPOOL_SIZE USER_SMI_SIZE
 
-#define MSM_ION_SF_SIZE		0x4000000 /* 64MB */
-#define MSM_ION_CAMERA_SIZE     MSM_PMEM_ADSP_SIZE
-#define MSM_ION_MM_FW_SIZE	0x200000 /* (2MB) */
-#define MSM_ION_MM_SIZE		0x3600000 /* (54MB) */
-#define MSM_ION_MFC_SIZE	SZ_8K
-#define MSM_ION_WB_SIZE		0x600000 /* 6MB */
-#define MSM_ION_QSECOM_SIZE	0x600000 /* (6MB) */
-#define MSM_ION_AUDIO_SIZE	MSM_PMEM_AUDIO_SIZE
-
-#ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
-#define MSM_ION_HEAP_NUM	9
-#else
-#define MSM_ION_HEAP_NUM	1
-#endif
 /* end deal with memory allocation */
 
 /* GPIO definition */
@@ -224,20 +210,18 @@
 /* CAMERA GPIO */
 #define SHOOTER_CAM_I2C_SDA           (47)
 #define SHOOTER_CAM_I2C_SCL           (48)
-
 #define SHOOTER_SP3D_GATE              (107)
 #define SHOOTER_SP3D_CORE_GATE         (58)
 #define SHOOTER_SP3D_SYS_RST           (102)
 #define SHOOTER_SP3D_PDX               (137)
-
 #define SHOOTER_S5K4E1_PD				(137)
 #define SHOOTER_S5K4E1_INTB				(102)
 #define SHOOTER_S5K4E1_VCM_PD			(58)
-
-#define SHOOTER_SP3D_MCLK		(32)
-#define SHOOTER_WEBCAM_STB		(140)
-#define SHOOTER_WEBCAM_RST		(138)
-#define SHOOTER_CAM_SEL			(141)
+#define SHOOTER_SP3D_MCLK           (32)
+#define SHOOTER_WEBCAM_STB          (140)
+#define SHOOTER_WEBCAM_RST           (138)
+#define SHOOTER_CAM_SEL           (141)
+#define SHOOTER_SP3D_INT	(106)
 
 
 /* PMIC */

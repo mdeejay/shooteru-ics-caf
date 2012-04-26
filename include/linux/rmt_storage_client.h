@@ -11,6 +11,10 @@
  *
  */
 
+#if defined(CONFIG_ARCH_MSM7X30)
+#include "rmt_storage_client-7x30.h"
+#endif
+
 #ifndef __RMT_STORAGE_SERVER_H
 #define __RMT_STORAGE_SERVER_H
 
@@ -29,15 +33,16 @@
 #define MAX_RAMFS_TBL_ENTRIES 3
 #define RAMFS_BLOCK_SIZE		512
 
-
+#ifndef CONFIG_HTC_DEVICE
 enum {
 	RMT_STORAGE_NO_ERROR = 0,	/* Success */
 	RMT_STORAGE_ERROR_PARAM,	/* Invalid parameters */
 	RMT_STORAGE_ERROR_PIPE,		/* RPC pipe failure */
-	RMT_STORAGE_ERROR_UNINIT,	/* Server is not initalized */
+	RMT_STORAGE_ERROR_UNINIT,	/* Server is not initialized */
 	RMT_STORAGE_ERROR_BUSY,		/* Device busy */
 	RMT_STORAGE_ERROR_DEVICE	/* Remote storage device */
 } rmt_storage_status;
+#endif
 
 struct rmt_storage_iovec_desc {
 	uint32_t sector_addr;
@@ -80,4 +85,15 @@ struct rmt_shrd_mem_param {
 
 #define RMT_STORAGE_SEND_STATUS \
 	_IOW(RMT_STORAGE_IOCTL_MAGIC, 2, struct rmt_storage_send_sts)
-#endif
+
+#ifdef CONFIG_HTC_DEVICE
+/* Added by HTC for latest efs_sync before restart or shutdown */
+int wait_rmt_final_call_back(int timeout);
+int wait_final_call_process(void);
+void rmt_storage_set_msm_client_status(int enable);
+int rmt_storage_add_mem(uint32_t pha_addr, unsigned long size);
+
+#define MDM_LATEST_EFS_SYNC_TIMEOUT_SEC		10
+/*---------------------------------------------------*/
+#endif /* CONFIG_HTC_DEVICE */
+#endif /* __RMT_STORAGE_SERVER_H */

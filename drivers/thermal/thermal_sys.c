@@ -915,7 +915,7 @@ struct thermal_cooling_device *thermal_cooling_device_register(
 	struct thermal_zone_device *pos;
 	int result;
 
-	if (strlen(type) >= THERMAL_NAME_LENGTH)
+	if ((type == NULL) || (strlen(type) >= THERMAL_NAME_LENGTH))
 		return ERR_PTR(-EINVAL);
 
 	if (!ops || !ops->get_max_state || !ops->get_cur_state ||
@@ -1027,6 +1027,8 @@ void thermal_cooling_device_unregister(struct
 
 EXPORT_SYMBOL(thermal_cooling_device_unregister);
 
+#define THERMAL_TRIP_CRITICAL_RETRY_MAX_COUNT		10
+#define THERMAL_TRIP_CRITICAL_RETRY_MS				1000
 /**
  * thermal_zone_device_update - force an update of a thermal zone's state
  * @ttz:	the thermal zone to update
@@ -1039,6 +1041,7 @@ void thermal_zone_device_update(struct thermal_zone_device *tz)
 	enum thermal_trip_type trip_type;
 	struct thermal_cooling_device_instance *instance;
 	struct thermal_cooling_device *cdev;
+	int retry_temp_count;
 
 	mutex_lock(&tz->lock);
 
@@ -1049,6 +1052,10 @@ void thermal_zone_device_update(struct thermal_zone_device *tz)
 		goto leave;
 	}
 
+	printk(KERN_INFO "[THERMAL][%s] Current temperature [%ld]...\n",
+					       tz->type, temp);
+
+	retry_temp_count = tz->thermal_trip_critical_retry_count;
 	for (count = 0; count < tz->trips; count++) {
 		tz->ops->get_trip_type(tz, count, &trip_type);
 		tz->ops->get_trip_temp(tz, count, &trip_temp);
@@ -1060,10 +1067,17 @@ void thermal_zone_device_update(struct thermal_zone_device *tz)
 					ret = tz->ops->notify(tz, count,
 							      trip_type);
 				if (!ret) {
-					printk(KERN_EMERG
-					       "Critical temperature reached (%ld C), shutting down.\n",
-					       temp/1000);
-					orderly_poweroff(true);
+					if ((++tz->thermal_trip_critical_retry_count) <= THERMAL_TRIP_CRITICAL_RETRY_MAX_COUNT) {
+						printk(KERN_INFO
+						       "[THERMAL][%s] Critical temperature reached %ld (>= %ld), retrying...(%d/%d)\n",
+						       tz->type, temp, trip_temp, tz->thermal_trip_critical_retry_count,
+						       THERMAL_TRIP_CRITICAL_RETRY_MAX_COUNT);
+					} else {
+						printk(KERN_EMERG
+							       "[THERMAL][%s] Critical temperature reached %ld (>= %ld), shutting down.\n",
+							       tz->type, temp, trip_temp);
+						orderly_poweroff(true);
+					}
 				}
 			}
 			break;
@@ -1087,11 +1101,18 @@ void thermal_zone_device_update(struct thermal_zone_device *tz)
 				if (tz->ops->notify)
 					ret = tz->ops->notify(tz, count,
 								trip_type);
-			if (!ret) {
-				printk(KERN_EMERG
-				"Critical temperature reached (%ld C), \
-					shutting down.\n", temp/1000);
-				orderly_poweroff(true);
+				if (!ret) {
+					if ((++tz->thermal_trip_critical_retry_count) <= THERMAL_TRIP_CRITICAL_RETRY_MAX_COUNT) {
+						printk(KERN_INFO
+						       "[THERMAL][%s] Critical temperature reached %ld (<= %ld), retrying...(%d/%d)\n",
+						       tz->type, temp, trip_temp, tz->thermal_trip_critical_retry_count,
+						       THERMAL_TRIP_CRITICAL_RETRY_MAX_COUNT);
+					} else {
+						printk(KERN_EMERG
+									"[THERMAL][%s] Critical temperature reached %ld (<= %ld), shutting down.\n",
+									tz->type, temp, trip_temp);
+						orderly_poweroff(true);
+					}
 				}
 			}
 			break;
@@ -1117,6 +1138,14 @@ void thermal_zone_device_update(struct thermal_zone_device *tz)
 		}
 	}
 
+	if (tz->thermal_trip_critical_retry_count &&
+		(tz->thermal_trip_critical_retry_count == retry_temp_count)) {
+		printk(KERN_INFO
+		       "[THERMAL][%s] Retry for critical temperature reached is successful...(%d/%d)\n",
+		       tz->type, tz->thermal_trip_critical_retry_count, THERMAL_TRIP_CRITICAL_RETRY_MAX_COUNT);
+		tz->thermal_trip_critical_retry_count = 0;
+	}
+
 	if (tz->forced_passive)
 		thermal_zone_device_passive(tz, temp, tz->forced_passive,
 					    THERMAL_TRIPS_NONE);
@@ -1124,7 +1153,9 @@ void thermal_zone_device_update(struct thermal_zone_device *tz)
 	tz->last_temperature = temp;
 
       leave:
-	if (tz->passive)
+	if (tz->thermal_trip_critical_retry_count)
+		thermal_zone_device_set_polling(tz, THERMAL_TRIP_CRITICAL_RETRY_MS);
+	else if (tz->passive)
 		thermal_zone_device_set_polling(tz, tz->passive_delay);
 	else if (tz->polling_delay)
 		thermal_zone_device_set_polling(tz, tz->polling_delay);
@@ -1164,7 +1195,7 @@ struct thermal_zone_device *thermal_zone_device_register(char *type,
 	int count;
 	int passive = 0;
 
-	if (strlen(type) >= THERMAL_NAME_LENGTH)
+	if ((type == NULL) || (strlen(type) >= THERMAL_NAME_LENGTH))
 		return ERR_PTR(-EINVAL);
 
 	if (trips > THERMAL_MAX_TRIPS || trips < 0)
@@ -1195,6 +1226,7 @@ struct thermal_zone_device *thermal_zone_device_register(char *type,
 	tz->tc2 = tc2;
 	tz->passive_delay = passive_delay;
 	tz->polling_delay = polling_delay;
+	tz->thermal_trip_critical_retry_count = 0;
 
 	dev_set_name(&tz->device, "thermal_zone%d", tz->id);
 	result = device_register(&tz->device);

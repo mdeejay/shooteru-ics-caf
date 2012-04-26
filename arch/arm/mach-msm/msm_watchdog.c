@@ -29,6 +29,14 @@
 #include <mach/socinfo.h>
 #include "msm_watchdog.h"
 #include "timer.h"
+#ifdef CONFIG_HTC_DEVICE
+#include <linux/kernel_stat.h>
+#include <linux/sched.h>
+#include <mach/board_htc.h>
+#include <mach/restart.h>
+#include <mach/scm-io.h>
+#include "htc_watchdog_monitor.h"
+#endif
 
 #define MODULE_NAME "msm_watchdog"
 
@@ -42,7 +50,14 @@
 
 #define WDT_HZ		32768
 
+#ifdef CONFIG_HTC_DEVICE
+/* Periodically dump top 5 cpu usages. */
+#define HTC_WATCHDOG_TOP_SCHED_DUMP 0
+static void __iomem *msm_tmr0_base = 0;
+static atomic_t watchdog_bark_counter = ATOMIC_INIT(0);
+#else
 static void __iomem *msm_tmr0_base;
+#endif
 
 static unsigned long delay_time;
 static unsigned long bark_time;
@@ -74,7 +89,11 @@ module_param_call(runtime_disable, wdog_enable_set, param_get_int,
  * On the kernel command line specify msm_watchdog.appsbark=1 to handle
  * watchdog barks in Linux. By default barks are processed by the secure side.
  */
+#ifdef CONFIG_HTC_DEVICE
+static int appsbark = 1;
+#else
 static int appsbark;
+#endif
 module_param(appsbark, int, 0);
 
 /*
@@ -95,6 +114,56 @@ static void init_watchdog_work(struct work_struct *work);
 static DECLARE_DELAYED_WORK(dogwork_struct, pet_watchdog_work);
 static DECLARE_WORK(init_dogwork_struct, init_watchdog_work);
 
+#ifdef CONFIG_HTC_DEVICE
+static unsigned int last_irqs[NR_IRQS];
+void wtd_dump_irqs(unsigned int dump)
+{
+	int n;
+	if (dump) {
+		pr_err("\nWatchdog dump irqs:\n");
+		pr_err("irqnr	total	since-last	status	name\n");
+	}
+	for (n = 1; n < NR_IRQS; n++) {
+		struct irqaction *act = irq_desc[n].action;
+		if (!act && !kstat_irqs(n))
+			continue;
+		if (dump) {
+			pr_err("%5d: %10u %11u	%s\n", n,
+				kstat_irqs(n),
+				kstat_irqs(n) - last_irqs[n],
+				(act && act->name) ? act->name : "???");
+		}
+		last_irqs[n] = kstat_irqs(n);
+	}
+}
+EXPORT_SYMBOL(wtd_dump_irqs);
+
+static int kernel_flag_boot_config(char *str)
+{
+	unsigned long kernelflag;
+
+	if (!str)
+		return -EINVAL;
+
+	if (strict_strtoul(str, 16, &kernelflag))
+		return -EINVAL;
+
+	if (kernelflag & KERNEL_FLAG_WDOG_DISABLE)
+		enable = 0;
+	else if (kernelflag & KERNEL_FLAG_WDOG_FIQ)
+		appsbark = 0;
+
+	return 0;
+}
+early_param("kernelflag", kernel_flag_boot_config);
+
+static void msm_watchdog_stop(void)
+{
+	__raw_writel(1, msm_tmr0_base + WDT0_RST);
+	__raw_writel(0, msm_tmr0_base + WDT0_EN);
+}
+#endif
+
 static int msm_watchdog_suspend(struct device *dev)
 {
 	if (!enable)
@@ -113,6 +182,9 @@ static int msm_watchdog_resume(struct device *dev)
 
 	__raw_writel(1, msm_tmr0_base + WDT0_EN);
 	__raw_writel(1, msm_tmr0_base + WDT0_RST);
+#if CONFIG_HTC_DEVICE
+	last_pet = sched_clock();
+#endif
 	mb();
 	return 0;
 }
@@ -206,6 +278,12 @@ void pet_watchdog(void)
 	if (slack_ns < min_slack_ns)
 		min_slack_ns = slack_ns;
 	last_pet = time_ns;
+#ifdef CONFIG_HTC_DEVICE
+#if HTC_WATCHDOG_TOP_SCHED_DUMP
+	htc_watchdog_top_stat();
+#endif
+	htc_watchdog_pet_cpu_record();
+#endif /* CONFIG_HTC_DEVICE */
 }
 
 static void pet_watchdog_work(struct work_struct *work)
@@ -214,6 +292,9 @@ static void pet_watchdog_work(struct work_struct *work)
 
 	if (enable)
 		schedule_delayed_work_on(0, &dogwork_struct, delay_time);
+#ifdef CONFIG_HTC_DEVICE
+	wtd_dump_irqs(0);
+#endif
 }
 
 static int msm_watchdog_remove(struct platform_device *pdev)
@@ -238,6 +319,11 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	unsigned long long t = sched_clock();
 	struct task_struct *tsk;
 
+#ifdef CONFIG_HTC_DEVICE
+	/* this should only enter once */
+	if (atomic_add_return(1, &watchdog_bark_counter) != 1)
+		return IRQ_HANDLED;
+#endif
 	nanosec_rem = do_div(t, 1000000000);
 	printk(KERN_INFO "Watchdog bark! Now = %lu.%06lu\n", (unsigned long) t,
 		nanosec_rem / 1000);
@@ -250,7 +336,23 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 
 		/* Suspend wdog until all stacks are printed */
 		msm_watchdog_suspend(NULL);
+#ifdef CONFIG_HTC_DEVICE
+		/* Dump top cpu loading processes */
+		htc_watchdog_top_stat();
 
+		/* Dump PC, LR, and registers. */
+		print_modules();
+		__show_regs(get_irq_regs());
+
+		wtd_dump_irqs(1);
+
+		dump_stack();
+
+		/* HTC changes: show blocked processes to debug hang problems */
+		printk(KERN_INFO "\n### Show Blocked State ###\n");
+		show_state_filter(TASK_UNINTERRUPTIBLE);
+		print_workqueue();
+#endif
 		printk(KERN_INFO "Stack trace dump:\n");
 
 		for_each_process(tsk) {
@@ -318,7 +420,9 @@ static void init_watchdog_work(struct work_struct *work)
 	__raw_writel(1, msm_tmr0_base + WDT0_EN);
 	__raw_writel(1, msm_tmr0_base + WDT0_RST);
 	last_pet = sched_clock();
-
+#ifdef CONFIG_HTC_DEVICE
+	htc_watchdog_monitor_init();
+#endif
 	printk(KERN_INFO "MSM Watchdog Initialized\n");
 
 	return;
@@ -330,6 +434,10 @@ static int msm_watchdog_probe(struct platform_device *pdev)
 	int ret;
 
 	if (!enable || !pdata || !pdata->pet_time || !pdata->bark_time) {
+#ifdef CONFIG_HTC_DEVICE
+		/* Turn off watchdog enabled by hboot */
+		msm_watchdog_stop();
+#endif
 		printk(KERN_INFO "MSM Watchdog Not Initialized\n");
 		return -ENODEV;
 	}
@@ -358,6 +466,10 @@ static int msm_watchdog_probe(struct platform_device *pdev)
 	}
 
 	enable_percpu_irq(WDT0_ACCSCSSNBARK_INT, 0);
+
+#ifdef CONFIG_HTC_DEVICE
+	configure_bark_dump();
+#endif
 
 	/*
 	 * This is only temporary till SBLs turn on the XPUs

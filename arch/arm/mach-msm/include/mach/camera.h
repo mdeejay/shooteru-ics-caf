@@ -339,6 +339,8 @@ struct msm_sensor_ctrl {
 	uint32_t s_mount_angle;
 	enum msm_st_frame_packing s_video_packing;
 	enum msm_st_frame_packing s_snap_packing;
+	int (*temp_s_config)(void *);
+	int node;
 };
 
 struct msm_actuator_ctrl {
@@ -657,6 +659,7 @@ int  msm_camio_clk_config(uint32_t freq);
 void msm_camio_clk_rate_set(int rate);
 int msm_camio_vfe_clk_rate_set(int rate);
 void msm_camio_clk_rate_set_2(struct clk *clk, int rate);
+void msm_camio_clk_set_min_rate(struct clk *clk, int rate);
 void msm_camio_clk_axi_rate_set(int rate);
 void msm_disable_io_gpio_clk(struct platform_device *);
 
@@ -677,6 +680,7 @@ int msm_camio_csi_config(struct msm_camera_csi_params *csi_params);
 int msm_camio_csiphy_config(struct msm_camera_csiphy_params *csiphy_params);
 int msm_camio_csid_config(struct msm_camera_csid_params *csid_params);
 void msm_io_read_interrupt(void);
+int msm_camio_csi_config_withReceiverDisabled(struct msm_camera_csi_params *csi_params);
 int add_axi_qos(void);
 int update_axi_qos(uint32_t freq);
 void release_axi_qos(void);
@@ -687,6 +691,15 @@ u32 msm_io_r_mb(void __iomem *addr);
 void msm_io_dump(void __iomem *addr, int size);
 void msm_io_memcpy(void __iomem *dest_addr, void __iomem *src_addr, u32 len);
 void msm_camio_set_perf_lvl(enum msm_bus_perf_setting);
+int msm_camio_csi_enable_lp_rec(void);
+int msm_camio_csi_disable_lp_rec(void);
+void msm_camio_csi_core_reset(void);
+void msm_camio_csi_misr_read(void);
+void msm_camio_csi_misr_debug_on(void);
+
+void msm_camio_csi_core_soft_reset(void);
+void msm_camio_csi_core_on(void);
+void msm_camio_disable_csi_log(void);
 void msm_camio_bus_scale_cfg(
 	struct msm_bus_scale_pdata *, enum msm_bus_perf_setting);
 

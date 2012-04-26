@@ -24,6 +24,8 @@
 #include <linux/mfd/pmic8058.h>
 #include <linux/mfd/pmic8901.h>
 #include <linux/mfd/pm8xxx/misc.h>
+#include <linux/sched.h>
+#include <linux/console.h>
 
 #include <asm/mach-types.h>
 
@@ -32,8 +34,12 @@
 #include <mach/socinfo.h>
 #include <mach/irqs.h>
 #include <mach/scm.h>
+#include <mach/board_htc.h>
+#include <mach/mdm.h>
 #include "msm_watchdog.h"
 #include "timer.h"
+#include "pm.h"
+#include "smd_private.h"
 
 #define WDT0_RST	0x38
 #define WDT0_EN		0x40
@@ -42,13 +48,24 @@
 
 #define PSHOLD_CTL_SU (MSM_TLMM_BASE + 0x820)
 
-#define RESTART_REASON_ADDR 0x65C
+#define RESTART_REASON_ADDR 0xF00
 #define DLOAD_MODE_ADDR     0x0
+
+#define MSM_REBOOT_REASON_BASE	(MSM_IMEM_BASE + RESTART_REASON_ADDR)
+#define SZ_DIAG_ERR_MSG 0xC8
 
 #define SCM_IO_DISABLE_PMIC_ARBITER	1
 
 static int restart_mode;
-void *restart_reason;
+
+struct htc_reboot_params {
+	unsigned reboot_reason;
+	unsigned radio_flag;
+	char reserved[256 - SZ_DIAG_ERR_MSG - 8];
+	char msg[SZ_DIAG_ERR_MSG];
+};
+
+static struct htc_reboot_params *reboot_params;
 
 int pmic_reset_irq;
 static void __iomem *msm_tmr0_base;
@@ -59,14 +76,31 @@ static void *dload_mode_addr;
 
 /* Download mode master kill-switch */
 static int dload_set(const char *val, struct kernel_param *kp);
+void set_ramdump_reason(const char *msg);
 static int download_mode = 1;
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
 
+
+int check_in_panic(void)
+{
+	return in_panic;
+}
+
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {
+	/* Prepare a buffer whose size is equal to htc_reboot_params->msg */
+	char kernel_panic_msg[SZ_DIAG_ERR_MSG] = "Kernel Panic";
 	in_panic = 1;
+
+	/* ptr is a buffer declared in panic function. It's never be NULL.
+	   Reserve one space for trailing zero.
+	*/
+	if (ptr)
+		snprintf(kernel_panic_msg, SZ_DIAG_ERR_MSG-1, "KP: %s", (char *)ptr);
+	set_ramdump_reason(kernel_panic_msg);
+
 	return NOTIFY_DONE;
 }
 
@@ -76,12 +110,15 @@ static struct notifier_block panic_blk = {
 
 static void set_dload_mode(int on)
 {
+/* Disable QCT dload mode as HTC has our own dload mechanism. */
+#if 0
 	if (dload_mode_addr) {
 		__raw_writel(on ? 0xE47B337D : 0, dload_mode_addr);
 		__raw_writel(on ? 0xCE14091A : 0,
 		       dload_mode_addr + sizeof(unsigned int));
 		mb();
 	}
+#endif
 }
 
 static int dload_set(const char *val, struct kernel_param *kp)
@@ -113,14 +150,81 @@ void msm_set_restart_mode(int mode)
 	restart_mode = mode;
 }
 EXPORT_SYMBOL(msm_set_restart_mode);
+static atomic_t restart_counter = ATOMIC_INIT(0);
+static int modem_cache_flush_done;
+
+static inline unsigned get_restart_reason(void)
+{
+	return reboot_params->reboot_reason;
+}
+/*
+   This function should not be called outside
+   to ensure that others do not change restart reason.
+   Use mode & cmd to set reason & msg in arch_reset().
+*/
+static inline void set_restart_reason(unsigned int reason)
+{
+	reboot_params->reboot_reason = reason;
+}
+
+/*
+   This function should not be called outsite
+   to ensure that others do no change restart reason.
+   Use mode & cmd to set reason & msg in arch_reset().
+*/
+static inline void set_restart_msg(const char *msg)
+{
+	strncpy(reboot_params->msg, msg, sizeof(reboot_params->msg)-1);
+}
+
+static bool console_flushed;
+
+static void msm_pm_flush_console(void)
+{
+	if (console_flushed)
+		return;
+	console_flushed = true;
+
+	printk("\n");
+	printk(KERN_EMERG "Restarting %s\n", linux_banner);
+	if (!console_trylock()) {
+		console_unlock();
+		return;
+	}
+
+	mdelay(50);
+
+	local_irq_disable();
+	if (console_trylock())
+		printk(KERN_EMERG "restart: Console was locked! Busting\n");
+	else
+		printk(KERN_EMERG "restart: Console was locked!\n");
+	console_unlock();
+}
+
+/* This function expose others to restart message for entering ramdump mode. */
+void set_ramdump_reason(const char *msg)
+{
+	/* only allow write msg before entering arch_rest */
+	if (atomic_read(&restart_counter) != 0)
+		return;
+
+	set_restart_reason(RESTART_REASON_RAMDUMP);
+	set_restart_msg(msg? msg: "");
+}
 
 static void __msm_power_off(int lower_pshold)
 {
+	set_restart_reason(RESTART_REASON_POWEROFF);
+
 	printk(KERN_CRIT "Powering off the SoC\n");
 #ifdef CONFIG_MSM_DLOAD_MODE
 	set_dload_mode(0);
 #endif
 	pm8xxx_reset_pwr_off(0);
+
+	if (cpu_is_msm8x60())
+		pm8xxx_reset_pwr_off(0);
 
 	if (lower_pshold) {
 		__raw_writel(0, PSHOLD_CTL_SU);
@@ -179,6 +283,9 @@ static irqreturn_t resout_irq_handler(int irq, void *dev_id)
 
 void arch_reset(char mode, const char *cmd)
 {
+	/* arch_reset should only enter once*/
+	if (atomic_add_return(1, &restart_counter) != 1)
+		return;
 
 #ifdef CONFIG_MSM_DLOAD_MODE
 
@@ -198,22 +305,93 @@ void arch_reset(char mode, const char *cmd)
 #endif
 
 	printk(KERN_NOTICE "Going down for restart now\n");
+	printk(KERN_NOTICE "%s: mode %d\n", __func__, mode);
+	if (cmd) {
+		printk(KERN_NOTICE "%s: restart command `%s'.\n", __func__, cmd);
+		/* XXX: modem will set msg itself.
+			Dying msg should be passed to this function directly. */
+		if (mode != RESTART_MODE_MODEM_CRASH)
+			set_restart_msg(cmd);
+	} else
+		printk(KERN_NOTICE "%s: no command restart.\n", __func__);
 
-	pm8xxx_reset_pwr_off(1);
-
-	if (cmd != NULL) {
-		if (!strncmp(cmd, "bootloader", 10)) {
-			__raw_writel(0x77665500, restart_reason);
-		} else if (!strncmp(cmd, "recovery", 8)) {
-			__raw_writel(0x77665502, restart_reason);
-		} else if (!strncmp(cmd, "oem-", 4)) {
-			unsigned long code;
-			code = simple_strtoul(cmd + 4, NULL, 16) & 0xff;
-			__raw_writel(0x6f656d00 | code, restart_reason);
-		} else {
-			__raw_writel(0x77665501, restart_reason);
-		}
+#ifdef CONFIG_ARCH_MSM8960
+	if (pm8xxx_reset_pwr_off(1)) {
+		in_panic = 1;
 	}
+#else
+	pm8xxx_reset_pwr_off(1);
+#endif
+
+	if (in_panic) {
+		/* Reason & message are set in panic notifier, panic_prep_restart.
+		   Kernel panic is a top priority.
+		   Keep this condition to avoid the reason and message being modified. */
+	} else if (!cmd) {
+		set_restart_reason(RESTART_REASON_REBOOT);
+	} else if (!strncmp(cmd, "bootloader", 10)) {
+		set_restart_reason(RESTART_REASON_BOOTLOADER);
+	} else if (!strncmp(cmd, "recovery", 8)) {
+		set_restart_reason(RESTART_REASON_RECOVERY);
+	} else if (!strcmp(cmd, "eraseflash")) {
+		set_restart_reason(RESTART_REASON_ERASE_FLASH);
+	} else if (!strncmp(cmd, "oem-", 4)) {
+		unsigned long code;
+		code = simple_strtoul(cmd + 4, 0, 16) & 0xff;
+
+		/* oem-97, 98, 99 are RIL fatal */
+		if ((code == 0x97) || (code == 0x98))
+			code = 0x99;
+
+		set_restart_reason(RESTART_REASON_OEM_BASE | code);
+	} else if (!strcmp(cmd, "force-hard") ||
+			(RESTART_MODE_LEGECY < mode && mode < RESTART_MODE_MAX)
+		) {
+		/* The only situation modem user triggers reset is NV restore after erasing EFS. */
+		if (mode == RESTART_MODE_MODEM_USER_INVOKED)
+			set_restart_reason(RESTART_REASON_REBOOT);
+		else
+			set_restart_reason(RESTART_REASON_RAMDUMP);
+	} else {
+		/* unknown command */
+		set_restart_reason(RESTART_REASON_REBOOT);
+	}
+
+	switch (get_restart_reason()) {
+	case RESTART_REASON_RIL_FATAL:
+	case RESTART_REASON_RAMDUMP:
+		if (!in_panic && mode != RESTART_MODE_APP_WATCHDOG_BARK) {
+			dump_stack();
+			show_state_filter(TASK_UNINTERRUPTIBLE);
+		}
+		break;
+	}
+
+	/*	for kernel panic & ril fatal & MDM_DOG_BITE & MDM_FATAL,
+		kenrel needs waiting modem flushing caches at most 10 seconds. 	*/
+	if (in_panic || get_restart_reason() == RESTART_REASON_RIL_FATAL || (mode == RESTART_MODE_MDM_DOG_BITE) || (mode == RESTART_MODE_MDM_FATAL)) {
+		int timeout = 10;
+		printk(KERN_INFO "%s: wait for modem flushing caches.\n", __func__);
+		while (timeout > 0 && !modem_cache_flush_done) {
+			/* Kick watchdog.
+			   Do not assume efs sync will be executed.
+			   Assume watchdog timeout is default 4 seconds. */
+			writel(1, msm_tmr0_base + WDT0_RST);
+
+			mdelay(1000);
+			timeout--;
+		}
+		if (timeout <= 0)
+			printk(KERN_NOTICE "%s: modem flushes cache timeout.\n", __func__);
+	}
+
+#if defined(CONFIG_ARCH_MSM8X60_LTE)
+	/* Added by HTC for forcing mdm9K to do the cache flush */
+	if (mode == RESTART_MODE_MODEM_CRASH)
+		charm_panic_wait_mdm_shutdown();
+#endif	/* CONFIG_ARCH_MSM8X60_LTE */
+
+	msm_pm_flush_console();
 
 	__raw_writel(0, msm_tmr0_base + WDT0_EN);
 	if (!(machine_is_msm8x60_fusion() || machine_is_msm8x60_fusn_ffa())) {
@@ -235,6 +413,7 @@ void arch_reset(char mode, const char *cmd)
 static int __init msm_restart_init(void)
 {
 	int rc;
+	arm_pm_restart = arch_reset;
 
 #ifdef CONFIG_MSM_DLOAD_MODE
 	atomic_notifier_chain_register(&panic_notifier_list, &panic_blk);
@@ -244,8 +423,11 @@ static int __init msm_restart_init(void)
 	set_dload_mode(1);
 #endif
 	msm_tmr0_base = msm_timer_get_timer0_base();
-	restart_reason = MSM_IMEM_BASE + RESTART_REASON_ADDR;
-	pm_power_off = msm_power_off;
+	reboot_params = (void *)MSM_REBOOT_REASON_BASE;
+	memset(reboot_params, 0x0, sizeof(struct htc_reboot_params));
+	set_restart_reason(RESTART_REASON_RAMDUMP);
+	set_restart_msg("Unknown");
+	reboot_params->radio_flag = get_radio_flag();
 
 	if (pmic_reset_irq != 0) {
 		rc = request_any_context_irq(pmic_reset_irq,
@@ -257,6 +439,7 @@ static int __init msm_restart_init(void)
 		pr_warn("no pmic restart interrupt specified\n");
 	}
 
+	pm_power_off = msm_power_off;
 	return 0;
 }
 

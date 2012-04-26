@@ -137,6 +137,7 @@ int __init parse_tag_memsize(const struct tag *tags);
 
 char *board_serialno(void);
 unsigned long get_kernel_flag(void);
+unsigned int get_radio_flag(void);
 
 struct t_cable_status_notifier{
 	struct list_head cable_notifier_link;
