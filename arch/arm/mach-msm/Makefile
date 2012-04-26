@@ -47,7 +47,7 @@ obj-$(CONFIG_MSM_AVS_HW) += avs_hw.o
 obj-$(CONFIG_CPU_V6) += idle-v6.o
 
 ifdef CONFIG_HTC_DEVICE
-obj-$(CONFIG_CPU_V7) += idle-v7-htc.o
+obj-$(CONFIG_CPU_V7) += idle-v7.o
 else
 obj-$(CONFIG_CPU_V7) += idle-v7.o
 endif
