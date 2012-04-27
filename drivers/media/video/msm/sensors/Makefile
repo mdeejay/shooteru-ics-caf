@@ -14,8 +14,10 @@ obj-$(CONFIG_S5K6AAFX) += s5k6aafx.o
 obj-$(CONFIG_OV8830) += ov8830.o
 obj-$(CONFIG_MT9D015) += mt9d015.o
 obj-$(CONFIG_OV2720) += ov2720.o
-obj-$(CONFIG_SP3D) += sp3d.o
-obj-$(CONFIG_QS_S5K4E1) += qs_s5k4e1.o
+obj-$(CONFIG_S5K4E1) += s5k4e1.o s5k4e1_reg.o
+
+obj-$(CONFIG_SP3D) += sp3d.o sp3d_reg_3d.o sp3d_reg_2d.o sp3d_reg_com.o sp3d_reg_cal.o
+obj-$(CONFIG_QS_S5K4E1) += qs_s5k4e1.o qs_s5k4e1_reg.o
 
 obj-$(CONFIG_MACH_HOLIDAY) += s5k3h2yx_reg_holiday.o s5k6aafx_reg_holiday.o s5k6aafx_reg_holiday_cob.o
 obj-$(CONFIG_MACH_VIGOR) += s5k3h2yx_reg_vigor.o ov8830_reg_vigor.o mt9d015_reg_vigor.o
@@ -25,5 +27,5 @@ obj-$(CONFIG_MACH_RUNNYMEDE) += s5k3h2yx_reg_runnymede.o ov8830_reg_runnymede.o 
 obj-$(CONFIG_MACH_KINGDOM) += s5k6aafx_reg_kingdom_cob.o s5k6aafx_reg_kingdom.o
 obj-$(CONFIG_MACH_SHOOTER) += sp3d_reg_3d.o sp3d_reg_2d.o sp3d_reg_com.o sp3d_reg_cal.o s5k6aafx_reg_shooter.o qs_s5k4e1_reg.o s5k6aafx_reg_shooter_cob.o
 obj-$(CONFIG_MACH_SHOOTER_K) += sp3d_reg_3d.o sp3d_reg_2d.o sp3d_reg_com.o sp3d_reg_cal.o s5k6aafx_reg_shooter.o qs_s5k4e1_reg.o s5k6aafx_reg_shooter_cob.o
-obj-$(CONFIG_MACH_SHOOTER_U) += sp3d_reg_3d.o sp3d_reg_2d.o sp3d_reg_com.o sp3d_reg_cal.o s5k6aafx_reg_shooter.o qs_s5k4e1_reg.o s5k6aafx_reg_shooter_cob.o
+obj-$(CONFIG_MACH_SHOOTER_U) += s5k6aafx_reg_shooter.o s5k6aafx_reg_shooter_cob.o
 obj-$(CONFIG_MACH_SHOOTER_CT) += sp3d_reg_3d.o sp3d_reg_2d.o sp3d_reg_com.o sp3d_reg_cal.o s5k6aafx_reg_shooter.o qs_s5k4e1_reg.o s5k6aafx_reg_shooter_cob.o

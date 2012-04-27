@@ -76,10 +76,6 @@
 #include "timer.h"
 #include "board-shooter.h"
 
-#ifdef CONFIG_ION_MSM
-static struct platform_device ion_dev;
-#endif
-
 struct pm8xxx_mpp_init_info {
 	unsigned			mpp;
 	struct pm8xxx_mpp_config_data	config;
@@ -106,6 +102,11 @@ struct pm8xxx_mpp_init_info {
 }
 
 unsigned engineerid, mem_size_mb;
+
+unsigned int shooter_get_engineerid(void)
+{
+	return engineerid;
+}
 
 static struct resource ram_console_resources[] = {
 	{
@@ -4619,6 +4620,11 @@ static void __init msm8x60_init(void)
 	platform_add_devices(early_regulators, ARRAY_SIZE(early_regulators));
 
 	msm_clock_init(&msm8x60_clock_init_data);
+
+#ifdef CONFIG_SP3D
+	spi_register_board_info(sp3d_spi_board_info,
+			ARRAY_SIZE(sp3d_spi_board_info));
+#endif
 
 	/* Buses need to be initialized before early-device registration
 	 * to get the platform data for fabrics.
