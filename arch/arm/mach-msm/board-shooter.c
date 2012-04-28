@@ -2149,7 +2149,7 @@ static void pm8058_usb_config(void)
 	mpp_init_setup(usb_mpp_init_configs, ARRAY_SIZE(usb_mpp_init_configs));
 }
 
-void config_shootersb_id_gpios(bool output)
+void config_shooter_usb_id_gpios(bool output)
 {
 	if (output) {
 		gpio_tlmm_config(usb_ID_PIN_ouput_table[0], 0);
@@ -2161,7 +2161,7 @@ void config_shootersb_id_gpios(bool output)
 	}
 }
 
-static void shootersb_dpdn_switch(int path)
+static void shooter_usb_dpdn_switch(int path)
 {
 	switch (path) {
 	case PATH_USB:
@@ -2189,13 +2189,13 @@ static struct cable_detect_platform_data cable_detect_pdata = {
 	.vbus_mpp_irq		= PM8058_IRQ_BASE + PM8058_CBLPWR_IRQ,
 	.detect_type		= CABLE_TYPE_PMIC_ADC,
 	.usb_id_pin_gpio	= SHOOTER_GPIO_USB_ID,
-	.usb_dpdn_switch	= shootersb_dpdn_switch,
+	.usb_dpdn_switch	= shooter_usb_dpdn_switch,
 	.mhl_reset_gpio		= SHOOTER_GPIO_MHL_RESET,
 	.mpp_data = {
 		.usbid_mpp	= PM8058_MPP_PM_TO_SYS(XOADC_MPP_4),
 		.usbid_amux	= PM_MPP_AIN_AMUX_CH5,
 	},
-	.config_usb_id_gpios	= config_shootersb_id_gpios,
+	.config_usb_id_gpios	= config_shooter_usb_id_gpios,
 #ifdef CONFIG_FB_MSM_HDMI_MHL
 	.mhl_1v2_power		= mhl_sii9234_1v2_power,
 #endif
