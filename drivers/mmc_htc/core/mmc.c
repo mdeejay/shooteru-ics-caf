@@ -22,6 +22,8 @@
 #include "mmc_ops.h"
 #include "sd_ops.h"
 
+#define EXT_CSD_CMD_SET_ZERO  0
+
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
 	0,		0,		0,		0
