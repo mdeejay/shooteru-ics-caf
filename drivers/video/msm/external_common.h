@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,16 +9,20 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ *
  */
 #ifndef __EXTERNAL_COMMON_H__
 #define __EXTERNAL_COMMON_H__
-#include <linux/switch.h>
 
 #ifdef DEBUG
 #ifndef DEV_DBG_PREFIX
 #define DEV_DBG_PREFIX "EXT_INTERFACE: "
 #endif
-#define DEV_DBG(args...)	pr_debug(DEV_DBG_PREFIX args)
+#define DEV_DBG(args...)	pr_info(DEV_DBG_PREFIX args)
 #else
 #define DEV_DBG(args...)	(void)0
 #endif /* DEBUG */
@@ -203,7 +207,6 @@ struct external_common_state_type {
 	struct kobject *uevent_kobj;
 	uint32 video_resolution;
 	struct device *dev;
-	struct switch_dev sdev;
 #ifdef CONFIG_FB_MSM_HDMI_3D
 	boolean format_3d;
 	void (*switch_3d)(boolean on);
@@ -217,17 +220,18 @@ struct external_common_state_type {
 	uint16 video_latency, audio_latency;
 	uint8 audio_data_block_cnt;
 	boolean present_3d;
-	boolean present_hdcp;
 	uint32 audio_data_blocks[16];
 	int (*read_edid_block)(int block, uint8 *edid_buf);
 	int (*hpd_feature)(int on);
+#endif
+#ifdef CONFIG_FB_MSM_TVOUT
+	int (*tvout_enable)(int on);
 #endif
 };
 
 /* The external interface driver needs to initialize the common state. */
 extern struct external_common_state_type *external_common_state;
 extern struct mutex external_common_state_hpd_mutex;
-extern struct mutex hdmi_msm_state_mutex;
 
 #ifdef CONFIG_FB_MSM_HDMI_COMMON
 #define VFRMT_NOT_SUPPORTED(VFRMT) \
@@ -245,13 +249,14 @@ bool hdmi_common_get_video_format_from_drv_data(struct msm_fb_data_type *mfd);
 const struct hdmi_disp_mode_timing_type *hdmi_common_get_mode(uint32 mode);
 const struct hdmi_disp_mode_timing_type *hdmi_common_get_supported_mode(
 	uint32 mode);
-const struct hdmi_disp_mode_timing_type *hdmi_mhl_get_mode(uint32 mode);
-const struct hdmi_disp_mode_timing_type *hdmi_mhl_get_supported_mode(
-	uint32 mode);
 void hdmi_common_init_panel_info(struct msm_panel_info *pinfo);
 #endif
-
+#ifdef CONFIG_FB_MSM_HDMI_MHL_SII9234
+extern  uint8_t ReadHPD(void);
+extern bool IsD0Mode(void);
+extern void SetHDCPStatus(bool Status);
+extern bool  g_bEnterEarlySuspend;
+#endif
 int external_common_state_create(struct platform_device *pdev);
 void external_common_state_remove(void);
-
 #endif /* __EXTERNAL_COMMON_H__ */

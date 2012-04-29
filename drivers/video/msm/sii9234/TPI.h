@@ -18,7 +18,7 @@
  *****************************************************************************/
 #include <mach/mhl.h>
 #include "TypeDefs.h"
-#include <mach/board.h>
+#include <mach/board_htc.h>
 bool TPI_Init(mhl_board_params);			/* Document purpose, usage */
 void TPI_Poll(void);			/* Document purpose, usage, rename */
 byte Status_Query(void);

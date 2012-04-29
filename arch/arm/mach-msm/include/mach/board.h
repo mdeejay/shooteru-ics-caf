@@ -527,6 +527,7 @@ struct isp1763_platform_data {
 	int (*setup_gpio)(int enable);
 };
 #endif
+
 /* common init routines for use by arch/arm/mach-msm/board-*.c */
 
 #ifdef CONFIG_OF_DEVICE

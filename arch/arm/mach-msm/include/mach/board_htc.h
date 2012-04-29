@@ -89,6 +89,17 @@ enum {
 	KERNEL_FLAG_GPIO_DUMP = BIT(31),
 };
 
+/***********************************
+ Direction: sii9234 drvier -> cable detect driver
+***********************************/
+struct t_mhl_status_notifier{
+	struct list_head mhl_notifier_link;
+	const char *name;
+	void (*func)(bool isMHL, int charging_type);
+};
+int mhl_detect_register_notifier(struct t_mhl_status_notifier *);
+static LIST_HEAD(g_lh_mhl_detect_notifier_list);
+
 /* common init routines for use by arch/arm/mach-msm/board-*.c */
 
 void __init msm_add_usb_devices(void (*phy_reset) (void));

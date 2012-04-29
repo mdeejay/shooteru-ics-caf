@@ -62,7 +62,9 @@
 #include <mach/rpm-regulator.h>
 #include <mach/socinfo.h>
 #include <mach/tpa2051d3.h>
-
+#ifdef CONFIG_FB_MSM_HDMI_MHL
+#include <mach/mhl.h>
+#endif
 #include "acpuclock.h"
 #include "devices.h"
 #include "devices-msm8x60.h"
@@ -122,6 +124,10 @@ static struct platform_device ram_console_device = {
 	.num_resources	= ARRAY_SIZE(ram_console_resources),
 	.resource	= ram_console_resources,
 };
+
+#ifdef CONFIG_FB_MSM_HDMI_MHL
+static void mhl_sii9234_1v2_power(bool enable);
+#endif
 
 static struct platform_device msm_tsens_device = {
   .name   = "tsens-tm",
@@ -974,6 +980,53 @@ void *setup_smi_region(void)
 {
 	return (void *)msm_bus_scale_register_client(&smi_client_pdata);
 }
+
+#ifdef CONFIG_FB_MSM_HDMI_MSM_PANEL
+static struct resource hdmi_msm_resources[] = {
+	{
+		.name  = "hdmi_msm_qfprom_addr",
+		.start = 0x00700000,
+		.end   = 0x007060FF,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.name  = "hdmi_msm_hdmi_addr",
+		.start = 0x04A00000,
+		.end   = 0x04A00FFF,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.name  = "hdmi_msm_irq",
+		.start = HDMI_IRQ,
+		.end   = HDMI_IRQ,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static int hdmi_enable_5v(int on);
+static int hdmi_core_power(int on, int show);
+static int hdmi_cec_power(int on);
+
+static struct msm_hdmi_platform_data hdmi_msm_data = {
+	.irq = HDMI_IRQ,
+	.enable_5v = hdmi_enable_5v,
+	.core_power = hdmi_core_power,
+	.cec_power = hdmi_cec_power,
+};
+
+static struct platform_device hdmi_msm_device = {
+	.name = "hdmi_msm",
+	.id = 0,
+	.num_resources = ARRAY_SIZE(hdmi_msm_resources),
+	.resource = hdmi_msm_resources,
+	.dev.platform_data = &hdmi_msm_data,
+};
+
+static struct platform_device *hdmi_devices[] __initdata = {
+	&hdmi_msm_device,
+};
+#endif /* CONFIG_FB_MSM_HDMI_MSM_PANEL */
+
 #ifndef CONFIG_MSM_MULTIMEDIA_USE_ION
 static struct android_pmem_platform_data android_pmem_smipool_pdata = {
 	.name = "pmem_smipool",
@@ -1255,6 +1308,16 @@ static struct msm_rpmrs_level msm_rpmrs_levels[] __initdata = {
 static struct msm_pm_boot_platform_data msm_pm_boot_pdata __initdata = {
 	.mode = MSM_PM_BOOT_CONFIG_TZ,
 };
+
+#define _GET_REGULATOR(var, name) do {				\
+	var = regulator_get(NULL, name);			\
+	if (IS_ERR(var)) {					\
+		pr_err("'%s' regulator not found, rc=%ld\n",	\
+			name, IS_ERR(var));			\
+		var = NULL;					\
+		return -ENODEV;					\
+	}							\
+} while (0)
 
 static struct msm_spm_platform_data msm_spm_data_v1[] __initdata = {
 	[0] = {
@@ -2120,7 +2183,7 @@ static uint32_t usb_ID_PIN_ouput_table[] = {
 };
 
 static uint32_t mhl_usb_switch_ouput_table[] = {
-	GPIO_CFG(SHOOTER_GPIO_MHL_USB_SW, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_4MA),
+	GPIO_CFG(SHOOTER_GPIO_MHL_USB_SWITCH, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_4MA),
 };
 
 static struct pm8xxx_mpp_init_info usb_mpp_init_configs[] = {
@@ -2173,14 +2236,14 @@ static void shooter_usb_dpdn_switch(int path)
 		gpio_tlmm_config(mhl_usb_switch_ouput_table[0], 0);
 
 		pr_info("[CABLE] %s: Set %s path\n", __func__, mhl ? "MHL" : "USB");
-		gpio_set_value(SHOOTER_GPIO_MHL_USB_SW, (mhl ^ !polarity) ? 1 : 0);
+		gpio_set_value(SHOOTER_GPIO_MHL_USB_SWITCH, (mhl ^ !polarity) ? 1 : 0);
 		break;
 	}
 	}
 
-#ifdef CONFIG_FB_MSM_HDMI_MHL
+	#ifdef CONFIG_FB_MSM_HDMI_MHL
 	sii9234_change_usb_owner((path == PATH_MHL)?1:0);
-#endif
+	#endif
 }
 
 static struct cable_detect_platform_data cable_detect_pdata = {
@@ -2197,7 +2260,7 @@ static struct cable_detect_platform_data cable_detect_pdata = {
 	},
 	.config_usb_id_gpios	= config_shooter_usb_id_gpios,
 #ifdef CONFIG_FB_MSM_HDMI_MHL
-	.mhl_1v2_power		= mhl_sii9234_1v2_power,
+	.mhl_1v2_power = mhl_sii9234_1v2_power,
 #endif
 };
 
@@ -2433,6 +2496,169 @@ static struct platform_device pm8058_leds = {
 		.platform_data  = &pm8058_leds_data,
 	},
 };
+
+#ifdef CONFIG_FB_MSM_HDMI_MHL
+static struct regulator *reg_8901_l0;
+static struct regulator *reg_8058_l19;
+static struct regulator *reg_8901_l3;
+
+static uint32_t msm_hdmi_off_gpio[] = {
+	GPIO_CFG(170,  0, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA),
+	GPIO_CFG(171,  0, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA),
+	GPIO_CFG(172,  0, GPIO_CFG_INPUT, GPIO_CFG_PULL_DOWN, GPIO_CFG_2MA),
+};
+
+static uint32_t msm_hdmi_on_gpio[] = {
+	GPIO_CFG(170,  1, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA),
+	GPIO_CFG(171,  1, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA),
+	GPIO_CFG(172,  1, GPIO_CFG_INPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA),
+};
+
+void hdmi_hpd_feature(int enable);
+
+static void mhl_sii9234_1v2_power(bool enable)
+{
+	static bool prev_on;
+
+	if (enable == prev_on)
+		return;
+
+	if (enable) {
+		config_gpio_table(msm_hdmi_on_gpio, ARRAY_SIZE(msm_hdmi_on_gpio));
+		hdmi_hpd_feature(1);
+		pr_info("%s(on): success\n", __func__);
+	} else {
+		config_gpio_table(msm_hdmi_off_gpio, ARRAY_SIZE(msm_hdmi_off_gpio));
+		hdmi_hpd_feature(0);
+		pr_info("%s(off): success\n", __func__);
+	}
+
+	prev_on = enable;
+}
+
+static int mhl_sii9234_all_power(bool enable)
+{
+	static bool prev_on;
+	int rc;
+
+	if (enable == prev_on)
+		return 0;
+
+	if (!reg_8058_l19)
+		_GET_REGULATOR(reg_8058_l19, "8058_l19");
+	if (!reg_8901_l3)
+		_GET_REGULATOR(reg_8901_l3, "8901_l3");
+	if (!reg_8901_l0)
+		_GET_REGULATOR(reg_8901_l0, "8901_l0");
+
+	if (enable) {
+		rc = regulator_set_voltage(reg_8058_l19, 1800000, 1800000);
+		if (rc) {
+			pr_err("%s: regulator_set_voltage reg_8058_l19 failed rc=%d\n",
+				__func__, rc);
+			return rc;
+		}
+		rc = regulator_set_voltage(reg_8901_l3, 3300000, 3300000);
+		if (rc) {
+			pr_err("%s: regulator_set_voltage reg_8901_l3 failed rc=%d\n",
+				__func__, rc);
+			return rc;
+		}
+
+		rc = regulator_set_voltage(reg_8901_l0, 1200000, 1200000);
+		if (rc) {
+			pr_err("%s: regulator_set_voltage reg_8901_l0 failed rc=%d\n",
+				__func__, rc);
+			return rc;
+		}	rc = regulator_enable(reg_8058_l19);
+
+		if (rc) {
+			pr_err("'%s' regulator enable failed, rc=%d\n",
+				"reg_8058_l19", rc);
+			return rc;
+		}
+		rc = regulator_enable(reg_8901_l3);
+		if (rc) {
+			pr_err("'%s' regulator enable failed, rc=%d\n",
+				"reg_8901_l3", rc);
+			return rc;
+		}
+
+		rc = regulator_enable(reg_8901_l0);
+		if (rc) {
+			pr_err("'%s' regulator enable failed, rc=%d\n",
+				"reg_8901_l0", rc);
+			return rc;
+		}
+		pr_info("%s(on): success\n", __func__);
+	} else {
+		rc = regulator_disable(reg_8058_l19);
+		if (rc)
+			pr_warning("'%s' regulator disable failed, rc=%d\n",
+				"reg_8058_l19", rc);
+		rc = regulator_disable(reg_8901_l3);
+		if (rc)
+			pr_warning("'%s' regulator disable failed, rc=%d\n",
+				"reg_8901_l3", rc);
+		rc = regulator_disable(reg_8901_l0);
+		if (rc)
+			pr_warning("'%s' regulator disable failed, rc=%d\n",
+				"reg_8901_l0", rc);
+		pr_info("%s(off): success\n", __func__);
+	}
+
+	prev_on = enable;
+
+	return 0;
+}
+
+#ifdef CONFIG_FB_MSM_HDMI_MHL_SII9234
+static uint32_t mhl_gpio_table[] = {
+	GPIO_CFG(SHOOTER_GPIO_MHL_RESET, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA),
+	GPIO_CFG(SHOOTER_GPIO_MHL_INT, 0, GPIO_CFG_INPUT, GPIO_CFG_PULL_UP, GPIO_CFG_2MA),
+};
+
+static int mhl_sii9234_power(int on)
+{
+	int rc = 0;
+
+	switch (on) {
+	case 0:
+		mhl_sii9234_1v2_power(false);
+		break;
+	case 1:
+		mhl_sii9234_all_power(true);
+		config_gpio_table(mhl_gpio_table, ARRAY_SIZE(mhl_gpio_table));
+		break;
+	default:
+		pr_warning("%s(%d) got unsupport parameter!!!\n", __func__, on);
+		break;
+	}
+	return rc;
+}
+ 
+static T_MHL_PLATFORM_DATA mhl_sii9234_device_data = {
+	.gpio_intr = SHOOTER_GPIO_MHL_INT,
+	.gpio_reset = SHOOTER_GPIO_MHL_RESET,
+	.ci2ca = 0,
+	#ifdef CONFIG_FB_MSM_HDMI_MHL
+	.mhl_usb_switch		= shooter_usb_dpdn_switch,
+	.mhl_1v2_power = mhl_sii9234_1v2_power,
+	#endif
+	.power = mhl_sii9234_power,
+};
+
+static struct i2c_board_info msm_i2c_gsbi7_mhl_sii9234_info[] =
+{
+	{
+		I2C_BOARD_INFO(MHL_SII9234_I2C_NAME, 0x72 >> 1),
+		.platform_data = &mhl_sii9234_device_data,
+		.irq = MSM_GPIO_TO_INT(SHOOTER_GPIO_MHL_INT)
+	},
+};
+#endif
+#endif
+
 
 #define PMIC_GPIO_SDC3_DET 34
 static int pm8058_gpios_init(void)
@@ -3188,6 +3414,17 @@ static struct i2c_registry msm8x60_i2c_devices[] __initdata = {
 		msm_i2c_gsbi7_tpa2051d3_info,
 		ARRAY_SIZE(msm_i2c_gsbi7_tpa2051d3_info),
 	},
+#endif
+#ifdef CONFIG_FB_MSM_HDMI_MHL
+#ifdef CONFIG_FB_MSM_HDMI_MHL_SII9234
+
+	{
+		MSM_GSBI7_QUP_I2C_BUS_ID,
+		msm_i2c_gsbi7_mhl_sii9234_info,
+		ARRAY_SIZE(msm_i2c_gsbi7_mhl_sii9234_info),
+	},
+
+#endif
 #endif
 #ifdef CONFIG_MSM_CAMERA
     {
@@ -4473,6 +4710,222 @@ static void __init msm8x60_init_dsps(void)
 }
 #endif /* CONFIG_MSM_DSPS */
 
+#ifdef CONFIG_FB_MSM_HDMI_MSM_PANEL
+static int hdmi_enable_5v(int on)
+{
+	static struct regulator *reg_8901_hdmi_mvs;	/* HDMI_5V */
+	static int prev_on;
+	int rc;
+
+	if (on == prev_on)
+		return 0;
+
+	if (!reg_8901_hdmi_mvs)
+		_GET_REGULATOR(reg_8901_hdmi_mvs, "8901_hdmi_mvs");
+
+	if (on) {
+		rc = regulator_enable(reg_8901_hdmi_mvs);
+		if (rc) {
+			pr_err("'%s' regulator enable failed, rc=%d\n",
+				"8901_hdmi_mvs", rc);
+			return rc;
+		}
+		pr_info("%s(on): success\n", __func__);
+	} else {
+		rc = regulator_disable(reg_8901_hdmi_mvs);
+		if (rc)
+			pr_warning("'%s' regulator disable failed, rc=%d\n",
+				"8901_hdmi_mvs", rc);
+		pr_info("%s(off): success\n", __func__);
+	}
+
+	prev_on = on;
+
+	return 0;
+}
+
+static int hdmi_core_power(int on, int show)
+{
+	static struct regulator *reg_8058_l16;		/* VDD_HDMI */
+	static int prev_on;
+	int rc;
+
+	if (on == prev_on)
+		return 0;
+
+	if (!reg_8058_l16)
+		_GET_REGULATOR(reg_8058_l16, "8058_l16");
+
+	if (on) {
+		rc = regulator_set_voltage(reg_8058_l16, 1800000, 1800000);
+		if (!rc)
+			rc = regulator_enable(reg_8058_l16);
+		if (rc) {
+			pr_err("'%s' regulator enable failed, rc=%d\n",
+				"8058_l16", rc);
+			return rc;
+		}
+
+		pr_info("%s(on): success\n", __func__);
+	} else {
+		rc = regulator_disable(reg_8058_l16);
+		if (rc)
+			pr_warning("'%s' regulator disable failed, rc=%d\n",
+				"8058_l16", rc);
+		pr_info("%s(off): success\n", __func__);
+	}
+
+	prev_on = on;
+
+	return 0;
+}
+
+static int hdmi_cec_power(int on)
+{
+	static struct regulator *reg_8901_l3;		/* HDMI_CEC */
+	static int prev_on;
+	int rc;
+
+	if (on == prev_on)
+		return 0;
+
+	if (!reg_8901_l3)
+		_GET_REGULATOR(reg_8901_l3, "8901_l3");
+
+	if (on) {
+		rc = regulator_set_voltage(reg_8901_l3, 3300000, 3300000);
+		if (!rc)
+			rc = regulator_enable(reg_8901_l3);
+		if (rc) {
+			pr_err("'%s' regulator enable failed, rc=%d\n",
+				"8901_l3", rc);
+			return rc;
+		}
+
+		pr_info("%s(on): success\n", __func__);
+	} else {
+		rc = regulator_disable(reg_8901_l3);
+		if (rc)
+			pr_warning("'%s' regulator disable failed, rc=%d\n",
+				"8901_l3", rc);
+		pr_info("%s(off): success\n", __func__);
+	}
+
+	prev_on = on;
+
+	return 0;
+}
+#endif /* CONFIG_FB_MSM_HDMI_MSM_PANEL */
+
+#ifdef CONFIG_FB_MSM_TVOUT
+static struct regulator *reg_8058_l13;
+
+static int atv_dac_power(int on)
+{
+	int rc = 0;
+	#define _GET_REGULATOR(var, name) do {				\
+		var = regulator_get(NULL, name);			\
+		if (IS_ERR(var)) {					\
+			pr_info("'%s' regulator not found, rc=%ld\n",	\
+				name, IS_ERR(var));			\
+			var = NULL;					\
+			return -ENODEV;					\
+		}							\
+	} while (0)
+
+	if (!reg_8058_l13)
+		_GET_REGULATOR(reg_8058_l13, "8058_l13");
+	#undef _GET_REGULATOR
+
+	if (on) {
+		rc = regulator_set_voltage(reg_8058_l13, 2050000, 2050000);
+		if (rc) {
+			pr_info("%s: '%s' regulator set voltage failed,\
+				rc=%d\n", __func__, "8058_l13", rc);
+			return rc;
+		}
+
+		rc = regulator_enable(reg_8058_l13);
+		if (rc) {
+			pr_err("%s: '%s' regulator enable failed,\
+				rc=%d\n", __func__, "8058_l13", rc);
+			return rc;
+		}
+	} else {
+		rc = regulator_force_disable(reg_8058_l13);
+		if (rc)
+			pr_warning("%s: '%s' regulator disable failed, rc=%d\n",
+				__func__, "8058_l13", rc);
+	}
+	return rc;
+
+#endif
+
+#ifdef CONFIG_FB_MSM_TVOUT
+
+#ifdef CONFIG_MSM_BUS_SCALING
+static struct msm_bus_vectors atv_bus_init_vectors[] = {
+	/* For now, 0th array entry is reserved.
+	 * Please leave 0 as is and don't use it
+	 */
+	{
+		.src = MSM_BUS_MASTER_MDP_PORT0,
+		.dst = MSM_BUS_SLAVE_SMI,
+		.ab = 0,
+		.ib = 0,
+	},
+	/* Master and slaves can be from different fabrics */
+	{
+		.src = MSM_BUS_MASTER_MDP_PORT0,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
+		.ab = 0,
+		.ib = 0,
+	},
+};
+static struct msm_bus_vectors atv_bus_def_vectors[] = {
+	/* For now, 0th array entry is reserved.
+	 * Please leave 0 as is and don't use it
+	 */
+	{
+		.src = MSM_BUS_MASTER_MDP_PORT0,
+		.dst = MSM_BUS_SLAVE_SMI,
+		.ab = 236390400,
+		.ib = 265939200,
+	},
+	/* Master and slaves can be from different fabrics */
+	{
+		.src = MSM_BUS_MASTER_MDP_PORT0,
+		.dst = MSM_BUS_SLAVE_EBI_CH0,
+		.ab = 236390400,
+		.ib = 265939200,
+	},
+};
+static struct msm_bus_paths atv_bus_scale_usecases[] = {
+	{
+		ARRAY_SIZE(atv_bus_init_vectors),
+		atv_bus_init_vectors,
+	},
+	{
+		ARRAY_SIZE(atv_bus_def_vectors),
+		atv_bus_def_vectors,
+	},
+};
+static struct msm_bus_scale_pdata atv_bus_scale_pdata = {
+	atv_bus_scale_usecases,
+	ARRAY_SIZE(atv_bus_scale_usecases),
+	.name = "atv",
+};
+#endif
+
+static struct tvenc_platform_data atv_pdata = {
+	.poll		 = 0,
+	.pm_vid_en	 = atv_dac_power,
+#ifdef CONFIG_MSM_BUS_SCALING
+	.bus_scale_table = &atv_bus_scale_pdata,
+#endif
+};
+#endif
+
 #ifdef CONFIG_MSM_RPM
 static struct msm_rpm_platform_data msm_rpm_data = {
 	.reg_base_addrs = {
@@ -4659,6 +5112,10 @@ static void __init msm8x60_init(void)
 
 #ifdef CONFIG_MSM_DSPS
 	msm8x60_init_dsps();
+#endif
+
+#ifdef CONFIG_FB_MSM_HDMI_MSM_PANEL
+		platform_add_devices(hdmi_devices, 1);
 #endif
 	pm8058_platform_data.leds_pdata = &pm8058_flash_leds_data;
 	pm8058_platform_data.vibrator_pdata = &pm8058_vib_pdata;
